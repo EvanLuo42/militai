@@ -9,7 +9,7 @@ const Framebuffer = extern struct {
     stride: u32,
 };
 
-const KernelEntry = *const fn (*Framebuffer) callconv(.C) noreturn;
+const KernelEntry = *const fn (*Framebuffer) callconv(.{ .x86_64_sysv = .{} }) noreturn;
 
 pub fn main() void {
     const bs = uefi.system_table.boot_services.?;

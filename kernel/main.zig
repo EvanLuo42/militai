@@ -22,8 +22,8 @@ fn serialInit() void {
     outb(COM1 + 3, 0x80);
     outb(COM1 + 0, 0x03);
     outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x03); 
-    outb(COM1 + 2, 0xC7); 
+    outb(COM1 + 3, 0x03);
+    outb(COM1 + 2, 0xC7);
     outb(COM1 + 4, 0x0B);
 }
 
@@ -58,7 +58,7 @@ pub const Framebuffer = extern struct {
     stride: u32,
 };
 
-export fn _start(fb: *Framebuffer) callconv(.sysv) noreturn {
+export fn _start(fb: *Framebuffer) callconv(.C) noreturn {
     serialInit();
 
     kprint("\n\n", .{});
@@ -66,7 +66,7 @@ export fn _start(fb: *Framebuffer) callconv(.sysv) noreturn {
     kprint("Hello from Zig Kernel!\n", .{});
     kprint("========================================\n", .{});
     kprint("[KERNEL] Video Info: {}x{}, Stride: {}\n", .{ fb.width, fb.height, fb.stride });
-    kprint("[KERNEL] Framebuffer Base: 0x{x}\n", .{ @intFromPtr(fb.base) });
+    kprint("[KERNEL] Framebuffer Base: 0x{x}\n", .{@intFromPtr(fb.base)});
 
     for (0..fb.height) |y| {
         for (0..fb.width) |x| {
@@ -76,7 +76,7 @@ export fn _start(fb: *Framebuffer) callconv(.sysv) noreturn {
             }
         }
     }
-    
+
     kprint("[KERNEL] Screen painted red.\n", .{});
     kprint("[KERNEL] Entering infinite loop...\n", .{});
 
