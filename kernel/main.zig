@@ -1,97 +1,81 @@
 const std = @import("std");
+const serial = @import("serial.zig");
+const common = @import("common");
 
-const COM1 = 0x3F8;
+pub const BootInfo = common.BootInfo;
 
-fn outb(port: u16, value: u8) void {
-    asm volatile ("outb %[value], %[port]"
-        :
-        : [value] "{al}" (value),
-          [port] "{dx}" (port),
-    );
-}
+const Pmm = @import("vm/pmm.zig").Pmm;
+const Vmm = @import("vm/vmm.zig");
+const Gdt = @import("arch/x86/gdt.zig");
+const Idt = @import("arch/x86/idt.zig");
+const Heap = @import("vm/heap.zig");
 
-fn inb(port: u16) u8 {
-    return asm volatile ("inb %[port], %[ret]"
-        : [ret] "={al}" (-> u8),
-        : [port] "{dx}" (port),
-    );
-}
-
-fn serialInit() void {
-    outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x80);
-    outb(COM1 + 0, 0x03);
-    outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x03);
-    outb(COM1 + 2, 0xC7);
-    outb(COM1 + 4, 0x0B);
-}
-
-fn isTransmitEmpty() bool {
-    return (inb(COM1 + 5) & 0x20) != 0;
-}
-
-fn serialPutChar(c: u8) void {
-    while (!isTransmitEmpty()) {}
-    outb(COM1, c);
-}
-
-fn serialWrite(context: void, bytes: []const u8) error{}!usize {
-    _ = context;
-    for (bytes) |c| {
-        serialPutChar(c);
-    }
-    return bytes.len;
-}
-
-const serial_writer = std.io.Writer(void, error{}, serialWrite){ .context = {} };
-
-pub fn kprint(comptime fmt: []const u8, args: anytype) void {
-    serial_writer.print(fmt, args) catch unreachable;
-}
-
-pub const Framebuffer = extern struct {
-    base: [*]u32,
-    size: u64,
-    width: u32,
-    height: u32,
-    stride: u32,
+pub const std_options: std.Options = .{
+    .page_size_min = 4096,
+    .page_size_max = 4096,
+    .logFn = kernelLog,
+    .log_level = .info,
 };
 
-export fn _start(fb: *Framebuffer) callconv(.C) noreturn {
-    serialInit();
+pub fn kernelLog(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const scope_prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+    const prefix = "[" ++ @tagName(level) ++ "] " ++ scope_prefix;
 
-    kprint("\n\n", .{});
-    kprint("========================================\n", .{});
-    kprint("Hello from Zig Kernel!\n", .{});
-    kprint("========================================\n", .{});
-    kprint("[KERNEL] Video Info: {}x{}, Stride: {}\n", .{ fb.width, fb.height, fb.stride });
-    kprint("[KERNEL] Framebuffer Base: 0x{x}\n", .{@intFromPtr(fb.base)});
+    serial.kprint(prefix ++ format, args);
+}
 
-    for (0..fb.height) |y| {
-        for (0..fb.width) |x| {
-            const index = @as(usize, y) * @as(usize, fb.stride) + x;
-            if (index < fb.size / 4) {
-                fb.base[index] = 0xFFFF0000;
-            }
-        }
-    }
+var kernel_stack: [16 * 1024]u8 align(16) = undefined;
 
-    kprint("[KERNEL] Screen painted red.\n", .{});
-    kprint("[KERNEL] Entering infinite loop...\n", .{});
+export fn _start(_: *BootInfo) linksection(".text.entry") callconv(.Naked) noreturn {
+    asm volatile (
+        \\ cli
+        \\ mov %[stack_top], %%rsp
+        \\ xor %%rbp, %%rbp
+        \\ call kmain
+        \\ hlt
+        :
+        : [stack_top] "r" (@intFromPtr(&kernel_stack) + kernel_stack.len),
+    );
 
-    hang();
+    while (true) {}
+}
+
+export fn kmain(boot_info: *const BootInfo) callconv(.C) noreturn {
+    serial.init();
+
+    serial.kprint("\n\n========================================\n", .{});
+    serial.kprint("Zircon starting...\n", .{});
+    serial.kprint("========================================\n", .{});
+
+    const mm = boot_info.mem_map;
+    const entries = if (mm.desc_size > 0) mm.size / mm.desc_size else 0;
+
+    std.log.info("[BOOT] mem_map: base=0x{x}, size={d}, desc_size={d}, entries~{d}\n", .{ @intFromPtr(mm.ptr), mm.size, mm.desc_size, entries });
+
+    Pmm.init(boot_info);
+    Vmm.init();
+
+    Gdt.init();
+
+    Idt.init();
+
+    Heap.init();
+
+    
+
+    std.log.info("[KERNEL] entering idle loop (hlt)...\n", .{});
+
+    serial.hang();
 }
 
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     _ = error_return_trace;
     _ = ret_addr;
-    kprint("\n!!!!! KERNEL PANIC !!!!!\n{s}\n", .{msg});
-    hang();
-}
-
-fn hang() noreturn {
-    while (true) {
-        asm volatile ("hlt");
-    }
+    std.log.err("\n!!!!! KERNEL PANIC !!!!!\n{s}\n", .{msg});
+    serial.hang();
 }
